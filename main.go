@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -103,13 +102,12 @@ type CombatData struct {
 	Combatant map[string]CombatantData `json:"Combatant"`
 }
 type Encounter struct {
-	Title           string `json:"title"`
-	Duration        string `json:"duration"`
-	Damage          string `json:"damage"`
-	Dps             string `json:"dps"`
-	Kills           string `json:"kills"`
-	Deaths          string `json:"deaths"`
-	CurrentZoneName string `json:"CurrentZoneName"`
+	Title    string `json:"title"`
+	Duration string `json:"duration"`
+	Damage   string `json:"damage"`
+	Dps      string `json:"dps"`
+	Kills    string `json:"kills"`
+	Deaths   string `json:"deaths"`
 
 	// DurationDupe needed because json unmarshal gets confused for some reason with duration and DURATION
 	// both in the JSON
