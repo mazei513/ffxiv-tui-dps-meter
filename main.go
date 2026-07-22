@@ -65,7 +65,7 @@ func main() {
 				}
 				fmt.Println("\033[2J\033[H")
 				enc := cd.Msg.Encounter
-				fmt.Printf("%s %s DPS:%10s Dmg:%10s Kills:%2s Deaths:%2s\n\n", enc.Duration, enc.Title, enc.Dps, enc.Damage, enc.Kills, enc.Deaths)
+				fmt.Printf("%s %s DPS:%10.2f Dmg:%10d Kills:%2d Deaths:%2d\n\n", enc.Duration, enc.Title, enc.Dps, enc.Damage, enc.Kills, enc.Deaths)
 				cmbs := make([]CombatantData, 0, len(cd.Msg.Combatant))
 				for _, d := range cd.Msg.Combatant {
 					cmbs = append(cmbs, d)
@@ -110,12 +110,12 @@ type CombatData struct {
 	Combatant map[string]CombatantData `json:"Combatant"`
 }
 type Encounter struct {
-	Title    string `json:"title"`
-	Duration string `json:"duration"`
-	Damage   string `json:"damage"`
-	Dps      string `json:"dps"`
-	Kills    string `json:"kills"`
-	Deaths   string `json:"deaths"`
+	Title    string   `json:"title"`
+	Duration string   `json:"duration"`
+	Damage   JsonAtoi `json:"damage"`
+	Dps      JsonAtod `json:"dps"`
+	Kills    JsonAtoi `json:"kills"`
+	Deaths   JsonAtoi `json:"deaths"`
 
 	// DurationDupe needed because json unmarshal gets confused for some reason with duration and DURATION
 	// both in the JSON
