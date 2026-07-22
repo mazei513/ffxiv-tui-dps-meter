@@ -15,7 +15,14 @@ import (
 )
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	logFile, err := os.CreateTemp("", "ffxiv-dps-meter-*.log")
+	if err != nil {
+		fmt.Println("temp log file", "err", err)
+		os.Exit(1)
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
+
 	debug := flag.Bool("debug", false, "sets debug logging")
 	flag.Parse()
 	if *debug {
