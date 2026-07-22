@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -44,7 +45,9 @@ func main() {
 		for {
 			_, m, err := c.ReadMessage()
 			if err != nil {
-				slog.Error("read", "err", err)
+				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
+					slog.Error("read", "err", err)
+				}
 				return
 			}
 			err = json.Unmarshal(m, &am)
