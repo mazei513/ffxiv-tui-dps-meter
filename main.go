@@ -1,33 +1,34 @@
 package main
 
 import (
+	"cmp"
+	"encoding/binary"
 	"encoding/json"
 	"flag"
-	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"slices"
-	"strconv"
-	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 func main() {
+	debug := flag.Bool("debug", false, "sets debug logging")
+	flag.Parse()
+	lvl := slog.LevelInfo
+	if *debug {
+		lvl = (slog.LevelDebug)
+	}
+
 	logFile, err := os.CreateTemp("", "ffxiv-dps-meter-*.log")
 	if err != nil {
-		fmt.Println("temp log file", "err", err)
+		os.Stderr.WriteString("temp log file err: " + err.Error())
 		os.Exit(1)
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
-
-	debug := flag.Bool("debug", false, "sets debug logging")
-	flag.Parse()
-	if *debug {
-		slog.SetLogLoggerLevel(slog.LevelDebug)
-	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: lvl})))
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
@@ -50,40 +51,56 @@ func main() {
 		// assumption is these can be reused
 		am := ACTMsg{}
 		cd := ACTMsgCombatData{}
+		cmbs := make([]CombatantData, 0, 8)
+		msgBuf := &smolBuf{}
+		encBuf := &smolBuf{}
+		encBuf.WriteString("\033[2J\033[HConnected\nNo Encounter\n")
 		for {
-			_, m, err := c.ReadMessage()
+			_, rd, err := c.NextReader()
 			if err != nil {
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 					slog.Error("read", "err", err)
 				}
 				return
 			}
-			err = json.Unmarshal(m, &am)
+			msgBuf.reset()
+			io.Copy(msgBuf, rd)
+			err = json.Unmarshal(msgBuf.bs, &am)
 			if err != nil {
 				slog.Error("json unmarshal", "err", err)
 				continue
 			}
 			switch am.MsgType {
 			case "CombatData":
-				err = json.Unmarshal(m, &cd)
+				slog.Debug("combat data", "data", string(msgBuf.bs))
+				err = json.Unmarshal(msgBuf.bs, &cd)
 				if err != nil {
 					slog.Error("json unmarshal", "err", err)
 					continue
 				}
-				fmt.Println("\033[2J\033[H")
 				enc := cd.Msg.Encounter
-				fmt.Printf("%s %s DPS:%10.2f Dmg:%10d Kills:%2d Deaths:%2d\n\n", enc.Duration, enc.Title, enc.Dps, enc.Damage, enc.Kills, enc.Deaths)
-				cmbs := make([]CombatantData, 0, len(cd.Msg.Combatant))
+				encBuf.reset()
+				encBuf.WriteString("\033[2J\033[H\033[32mConnected\033[0m\n")
+				enc.fmt(encBuf)
+				cmbs = cmbs[:0]
 				for _, d := range cd.Msg.Combatant {
+					if d.Job == "" {
+						// Enemies also on this list, can filter them out by checking if job isn't empty.
+						// This probably means pets are removed as well, but I don't play those jobs.
+						continue
+					} else if d.Job == "Limit Break" {
+						d.Job = "LB "
+					}
 					cmbs = append(cmbs, d)
 				}
-				slices.SortFunc(cmbs, func(a, b CombatantData) int { return int(b.Damage - a.Damage) })
+				slices.SortFunc(cmbs, sortByDamage)
 				for _, cmb := range cmbs {
-					fmt.Printf("%3d%% %s:%20s DPS:%10.2f Dmg:%10d Crit:%3d%% DH:%3d%% CritDH:%3d%% Deaths:%2d\n", cmb.DamagePct, cmb.Job, cmb.Name, cmb.Dps, cmb.Damage, cmb.CritPct, cmb.DirectHitPct, cmb.CritDirectHitPct, cmb.Deaths)
+					cmb.fmt(encBuf)
 				}
 			default:
-				slog.Debug("unhandled", "data", m)
+				slog.Debug("unhandled", "data", string(msgBuf.bs))
 			}
+			os.Stdout.Write(encBuf.bs)
 		}
 	}()
 
@@ -92,17 +109,40 @@ func main() {
 		case <-done:
 			return
 		case <-interrupt:
-			err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			buf := make([]byte, 2)
+			binary.BigEndian.PutUint16(buf, uint16(websocket.CloseNormalClosure))
+			err := c.WriteMessage(websocket.CloseMessage, buf)
 			if err != nil {
 				slog.Error("write close", "err", err)
 				os.Exit(1)
 			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-			}
 			return
 		}
+	}
+}
+
+// smolBuf is a simpler bytes.Buffer
+type smolBuf struct{ bs []byte }
+
+func (sb *smolBuf) reset() {
+	sb.bs = sb.bs[:0]
+}
+func (sb *smolBuf) Write(b []byte) (int, error) {
+	sb.bs = append(sb.bs, b...)
+	return len(b), nil
+}
+func (sb *smolBuf) WriteByte(b byte) error {
+	sb.bs = append(sb.bs, b)
+	return nil
+}
+func (sb *smolBuf) WriteString(b string) (int, error) {
+	sb.bs = append(sb.bs, b...)
+	return len(b), nil
+}
+func (sb *smolBuf) strsJoin(sep byte, bs ...string) {
+	for _, b := range bs {
+		sb.bs = append(sb.bs, b...)
+		sb.bs = append(sb.bs, sep)
 	}
 }
 
@@ -117,80 +157,92 @@ type CombatData struct {
 	Combatant map[string]CombatantData `json:"Combatant"`
 }
 type Encounter struct {
-	Title    string   `json:"title"`
-	Duration string   `json:"duration"`
-	Damage   JsonAtoi `json:"damage"`
-	Dps      JsonAtod `json:"dps"`
-	Kills    JsonAtoi `json:"kills"`
-	Deaths   JsonAtoi `json:"deaths"`
+	Title    string `json:"title"`
+	Duration string `json:"duration"`
+	Damage   string `json:"damage"`
+	Dps      string `json:"dps"`
+	Deaths   string `json:"deaths"`
 
-	// DurationDupe needed because json unmarshal gets confused for some reason with duration and DURATION
-	// both in the JSON
+	// DurationDupe needed because json unmarshal gets confused for some reason with duration and
+	// DURATION both in the JSON
 	DurationDupe string `json:"DURATION"`
 	// DpsDupe needed because json unmarshal gets confused for some reason with dps and DPS
 	// both in the JSON
 	DpsDupe string `json:"DPS"`
 }
+
+func (e Encounter) fmt(sb *smolBuf) {
+	sb.strsJoin(' ', e.Duration, e.Title, "DPS:", padSp(10, e.Dps), "Dmg:", padSp(10, e.Damage), "Deaths:", padSp(2, e.Deaths))
+	sb.WriteByte('\n')
+}
+
 type CombatantData struct {
-	Name             string      `json:"name"`
-	Damage           JsonAtoi    `json:"damage"`
-	DamagePct        JsonAtoiPct `json:"damage%"`
-	Dps              JsonAtod    `json:"dps"`
-	CritPct          JsonAtoiPct `json:"crithit%"`
-	Deaths           JsonAtoi    `json:"deaths"`
-	Job              string      `json:"Job"`
-	DirectHitPct     JsonAtoiPct `json:"DirectHitPct"`
-	CritDirectHitPct JsonAtoiPct `json:"CritDirectHitPct"`
+	Name             string `json:"name"`
+	Damage           string `json:"damage"`
+	DamagePct        string `json:"damage%"`
+	Dps              string `json:"dps"`
+	CritPct          string `json:"crithit%"`
+	Deaths           string `json:"deaths"`
+	Job              string `json:"Job"`
+	DirectHitPct     string `json:"DirectHitPct"`
+	CritDirectHitPct string `json:"CritDirectHitPct"`
 
 	// DpsDupe needed because json unmarshal gets confused for some reason with dps and DPS
 	// both in the JSON
 	DpsDupe string `json:"DPS"`
 }
 
-type JsonAtoi int
-
-func (v *JsonAtoi) UnmarshalJSON(data []byte) error {
-	var sv string
-	if err := json.Unmarshal(data, &sv); err != nil {
-		return err
+func (c CombatantData) fmt(sb *smolBuf) {
+	color := "\033[33m"
+	if c.Name != "YOU" {
+		switch c.Job {
+		case "Whm", "Sch", "Ast", "Sge":
+			color = "\033[32m"
+		case "Gnb", "War", "Pld", "Drk":
+			color = "\033[34m"
+		default:
+			color = "\033[31m"
+		}
 	}
-
-	iv, err := strconv.Atoi(sv)
-	if err != nil {
-		return err
+	sb.WriteString(color)
+	sb.strsJoin(' ', padSp(3, c.DamagePct), c.Job, padSp(20, c.Name))
+	sb.WriteByte('\t')
+	dps := c.Dps
+	if dps == "∞" {
+		dps = "Inf"
 	}
-	*v = JsonAtoi(iv)
-	return nil
+	sb.strsJoin(' ', "DPS:", padSp(10, dps))
+	sb.WriteByte('\t')
+	sb.strsJoin(' ', "Dmg:", padSp(10, c.Damage))
+	sb.WriteByte('\t')
+	sb.strsJoin(' ', "Crt:", padSp(3, c.CritPct))
+	sb.WriteByte('\t')
+	sb.strsJoin(' ', "DH:", padSp(3, c.DirectHitPct))
+	sb.WriteByte('\t')
+	sb.strsJoin(' ', "CrtDH:", padSp(3, c.CritDirectHitPct))
+	sb.WriteByte('\t')
+	sb.strsJoin(' ', "Deaths:", padSp(2, c.Deaths))
+	sb.WriteString("\033[0m\n")
+}
+func sortByDamage(a, b CombatantData) int {
+	return cmp.Compare(padZ(10, b.Damage), padZ(10, a.Damage))
 }
 
-type JsonAtod float64
+// Digging into strings.Repeat, for short sequences of spaces, it substrings a constant string of
+// spaces. This is to do that directly instead of going through strings.Repeat. For now only need
+// at most 20 spaces.
+const spaces = "                    "
+const zeroes = "00000000000000000000"
 
-func (v *JsonAtod) UnmarshalJSON(data []byte) error {
-	var sv string
-	if err := json.Unmarshal(data, &sv); err != nil {
-		return err
+func padSp(width int, s string) string {
+	if len(s) > width {
+		return s
 	}
-
-	iv, err := strconv.ParseFloat(sv, 64)
-	if err != nil {
-		return err
-	}
-	*v = JsonAtod(iv)
-	return nil
+	return spaces[:width-len(s)] + s
 }
-
-type JsonAtoiPct int
-
-func (v *JsonAtoiPct) UnmarshalJSON(data []byte) error {
-	var sv string
-	if err := json.Unmarshal(data, &sv); err != nil {
-		return err
+func padZ(width int, s string) string {
+	if len(s) > width {
+		return s
 	}
-
-	iv, err := strconv.Atoi(sv[:len(sv)-1])
-	if err != nil {
-		return err
-	}
-	*v = JsonAtoiPct(iv)
-	return nil
+	return zeroes[:width-len(s)] + s
 }
