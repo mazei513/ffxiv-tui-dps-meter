@@ -83,6 +83,7 @@ func main() {
 	for {
 		select {
 		case <-done:
+			return
 		case <-interrupt:
 			err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			if err != nil {
