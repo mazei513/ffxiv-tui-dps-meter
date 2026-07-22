@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -63,9 +65,14 @@ func main() {
 				}
 				fmt.Println("\033[2J\033[H")
 				enc := cd.Msg.Encounter
-				fmt.Printf("%s Dur:%s DPS:%s Dmg:%s Kills:%s Deaths:%s\n\n", enc.Title, enc.Duration, enc.Dps, enc.Damage, enc.Kills, enc.Deaths)
-				for name, d := range cd.Msg.Combatant {
-					fmt.Printf("%s:%s %%:%s DPS:%s Dmg:%s Crit:%s DH:%s CritDH:%s Deaths:%s\n", d.Job, name, d.DamagePct, d.Dps, d.Damage, d.CritPct, d.DirectHitPct, d.CritDirectHitPct, d.Deaths)
+				fmt.Printf("%s %s DPS:%10s Dmg:%10s Kills:%2s Deaths:%2s\n\n", enc.Duration, enc.Title, enc.Dps, enc.Damage, enc.Kills, enc.Deaths)
+				cmbs := make([]CombatantData, 0, len(cd.Msg.Combatant))
+				for _, d := range cd.Msg.Combatant {
+					cmbs = append(cmbs, d)
+				}
+				slices.SortFunc(cmbs, func(a, b CombatantData) int { return int(b.Damage - a.Damage) })
+				for _, cmb := range cmbs {
+					fmt.Printf("%3d%% %s:%20s DPS:%10.2f Dmg:%10d Crit:%3d%% DH:%3d%% CritDH:%3d%% Deaths:%2d\n", cmb.DamagePct, cmb.Job, cmb.Name, cmb.Dps, cmb.Damage, cmb.CritPct, cmb.DirectHitPct, cmb.CritDirectHitPct, cmb.Deaths)
 				}
 			default:
 				slog.Debug("unhandled", "data", m)
@@ -112,15 +119,70 @@ type Encounter struct {
 	// DurationDupe needed because json unmarshal gets confused for some reason with duration and DURATION
 	// both in the JSON
 	DurationDupe string `json:"DURATION"`
+	// DpsDupe needed because json unmarshal gets confused for some reason with dps and DPS
+	// both in the JSON
+	DpsDupe string `json:"DPS"`
 }
 type CombatantData struct {
-	Name             string `json:"name"`
-	Damage           string `json:"damage"`
-	DamagePct        string `json:"damage%"`
-	Dps              string `json:"dps"`
-	CritPct          string `json:"crithit%"`
-	Deaths           string `json:"deaths"`
-	Job              string `json:"Job"`
-	DirectHitPct     string `json:"DirectHitPct"`
-	CritDirectHitPct string `json:"CritDirectHitPct"`
+	Name             string      `json:"name"`
+	Damage           JsonAtoi    `json:"damage"`
+	DamagePct        JsonAtoiPct `json:"damage%"`
+	Dps              JsonAtod    `json:"dps"`
+	CritPct          JsonAtoiPct `json:"crithit%"`
+	Deaths           JsonAtoi    `json:"deaths"`
+	Job              string      `json:"Job"`
+	DirectHitPct     JsonAtoiPct `json:"DirectHitPct"`
+	CritDirectHitPct JsonAtoiPct `json:"CritDirectHitPct"`
+
+	// DpsDupe needed because json unmarshal gets confused for some reason with dps and DPS
+	// both in the JSON
+	DpsDupe string `json:"DPS"`
+}
+
+type JsonAtoi int
+
+func (v *JsonAtoi) UnmarshalJSON(data []byte) error {
+	var sv string
+	if err := json.Unmarshal(data, &sv); err != nil {
+		return err
+	}
+
+	iv, err := strconv.Atoi(sv)
+	if err != nil {
+		return err
+	}
+	*v = JsonAtoi(iv)
+	return nil
+}
+
+type JsonAtod float64
+
+func (v *JsonAtod) UnmarshalJSON(data []byte) error {
+	var sv string
+	if err := json.Unmarshal(data, &sv); err != nil {
+		return err
+	}
+
+	iv, err := strconv.ParseFloat(sv, 64)
+	if err != nil {
+		return err
+	}
+	*v = JsonAtod(iv)
+	return nil
+}
+
+type JsonAtoiPct int
+
+func (v *JsonAtoiPct) UnmarshalJSON(data []byte) error {
+	var sv string
+	if err := json.Unmarshal(data, &sv); err != nil {
+		return err
+	}
+
+	iv, err := strconv.Atoi(sv[:len(sv)-1])
+	if err != nil {
+		return err
+	}
+	*v = JsonAtoiPct(iv)
+	return nil
 }
