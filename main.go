@@ -50,8 +50,7 @@ func main() {
 		defer close(done)
 		// assumption is these can be reused
 		am := ACTMsg{}
-		cd := ACTMsgCombatData{}
-		cmbs := make([]CombatantData, 0, 8)
+		cmbs := make([]CombatantData, 0, 10)
 		msgBuf := &smolBuf{}
 		encBuf := &smolBuf{}
 		encBuf.WriteString("\033[2J\033[HConnected\nNo Encounter\n")
@@ -72,30 +71,10 @@ func main() {
 			}
 			switch am.MsgType {
 			case "CombatData":
-				slog.Debug("combat data", "data", string(msgBuf.bs))
-				err = json.Unmarshal(msgBuf.bs, &cd)
+				cmbs, err = renderEncounter(encBuf, cmbs[:0], msgBuf.bs)
 				if err != nil {
-					slog.Error("json unmarshal", "err", err)
+					slog.Error("render encounter", "err", err)
 					continue
-				}
-				enc := cd.Msg.Encounter
-				encBuf.reset()
-				encBuf.WriteString("\033[2J\033[H\033[32mConnected\033[0m\n")
-				enc.fmt(encBuf)
-				cmbs = cmbs[:0]
-				for _, d := range cd.Msg.Combatant {
-					if d.Job == "" {
-						// Enemies also on this list, can filter them out by checking if job isn't empty.
-						// This probably means pets are removed as well, but I don't play those jobs.
-						continue
-					} else if d.Job == "Limit Break" {
-						d.Job = "LB "
-					}
-					cmbs = append(cmbs, d)
-				}
-				slices.SortFunc(cmbs, sortByDamage)
-				for _, cmb := range cmbs {
-					cmb.fmt(encBuf)
 				}
 			default:
 				slog.Debug("unhandled", "data", string(msgBuf.bs))
@@ -121,6 +100,35 @@ func main() {
 	}
 }
 
+func renderEncounter(buf *smolBuf, cmbBuf []CombatantData, data []byte) ([]CombatantData, error) {
+	// The string(data) allocates a whole bunch of memory
+	// slog.Debug("combat data", "data", string(data))
+	var cd ACTMsgCombatData
+	err := json.Unmarshal(data, &cd)
+	if err != nil {
+		return cmbBuf, err
+	}
+	enc := cd.Msg.Encounter
+	buf.reset()
+	buf.WriteString("\033[2J\033[H\033[32mConnected\033[0m\n")
+	enc.fmt(buf)
+	for _, d := range cd.Msg.Combatant {
+		if d.Job == "" {
+			// Enemies also on this list, can filter them out by checking if job isn't empty.
+			// This probably means pets are removed as well, but I don't play those jobs.
+			continue
+		} else if d.Job == "Limit Break" {
+			d.Job = "LB "
+		}
+		cmbBuf = append(cmbBuf, d)
+	}
+	slices.SortFunc(cmbBuf, sortByDamage)
+	for _, cmb := range cmbBuf {
+		cmb.fmt(buf)
+	}
+	return cmbBuf, nil
+}
+
 // smolBuf is a simpler bytes.Buffer
 type smolBuf struct{ bs []byte }
 
@@ -139,7 +147,7 @@ func (sb *smolBuf) WriteString(b string) (int, error) {
 	sb.bs = append(sb.bs, b...)
 	return len(b), nil
 }
-func (sb *smolBuf) strsJoin(sep byte, bs ...string) {
+func (sb *smolBuf) joins(sep byte, bs ...string) {
 	for _, b := range bs {
 		sb.bs = append(sb.bs, b...)
 		sb.bs = append(sb.bs, sep)
@@ -172,7 +180,7 @@ type Encounter struct {
 }
 
 func (e Encounter) fmt(sb *smolBuf) {
-	sb.strsJoin(' ', e.Duration, e.Title, "DPS:", padSp(10, e.Dps), "Dmg:", padSp(10, e.Damage), "Deaths:", padSp(2, e.Deaths))
+	sb.joins(' ', e.Duration, e.Title, "DPS:", pad(10, e.Dps), "Dmg:", pad(10, e.Damage), "Deaths:", pad(2, e.Deaths))
 	sb.WriteByte('\n')
 }
 
@@ -205,44 +213,38 @@ func (c CombatantData) fmt(sb *smolBuf) {
 		}
 	}
 	sb.WriteString(color)
-	sb.strsJoin(' ', padSp(3, c.DamagePct), c.Job, padSp(20, c.Name))
+	sb.joins(' ', pad(3, c.DamagePct), c.Job, pad(20, c.Name))
 	sb.WriteByte('\t')
 	dps := c.Dps
 	if dps == "∞" {
 		dps = "Inf"
 	}
-	sb.strsJoin(' ', "DPS:", padSp(10, dps))
+	sb.joins(' ', "DPS:", pad(10, dps))
 	sb.WriteByte('\t')
-	sb.strsJoin(' ', "Dmg:", padSp(10, c.Damage))
+	sb.joins(' ', "Dmg:", pad(10, c.Damage))
 	sb.WriteByte('\t')
-	sb.strsJoin(' ', "Crt:", padSp(3, c.CritPct))
+	sb.joins(' ', "Crt:", pad(3, c.CritPct))
 	sb.WriteByte('\t')
-	sb.strsJoin(' ', "DH:", padSp(3, c.DirectHitPct))
+	sb.joins(' ', "DH:", pad(3, c.DirectHitPct))
 	sb.WriteByte('\t')
-	sb.strsJoin(' ', "CrtDH:", padSp(3, c.CritDirectHitPct))
+	sb.joins(' ', "CrtDH:", pad(3, c.CritDirectHitPct))
 	sb.WriteByte('\t')
-	sb.strsJoin(' ', "Deaths:", padSp(2, c.Deaths))
+	sb.joins(' ', "Deaths:", pad(2, c.Deaths))
 	sb.WriteString("\033[0m\n")
 }
 func sortByDamage(a, b CombatantData) int {
-	return cmp.Compare(padZ(10, b.Damage), padZ(10, a.Damage))
+	return cmp.Compare(pad(10, b.Damage), pad(10, a.Damage))
 }
 
 // Digging into strings.Repeat, for short sequences of spaces, it substrings a constant string of
 // spaces. This is to do that directly instead of going through strings.Repeat. For now only need
 // at most 20 spaces.
 const spaces = "                    "
-const zeroes = "00000000000000000000"
 
-func padSp(width int, s string) string {
+// pad doesn't handle UTF-8 strings
+func pad(width int, s string) string {
 	if len(s) > width {
 		return s
 	}
 	return spaces[:width-len(s)] + s
-}
-func padZ(width int, s string) string {
-	if len(s) > width {
-		return s
-	}
-	return zeroes[:width-len(s)] + s
 }
