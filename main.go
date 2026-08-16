@@ -53,7 +53,7 @@ func main() {
 		cmbs := make([]CombatantData, 0, 10)
 		msgBuf := &smolBuf{}
 		encBuf := &smolBuf{}
-		encBuf.WriteString("\033[2J\033[HConnected\nNo Encounter\n")
+		encBuf.WriteString("\033[2J\033[H\033[32mConnected\033[0m\nNo Encounter\n")
 		for {
 			_, rd, err := c.NextReader()
 			if err != nil {
@@ -112,6 +112,8 @@ func renderEncounter(buf *smolBuf, cmbBuf []CombatantData, data []byte) ([]Comba
 	buf.reset()
 	buf.WriteString("\033[2J\033[H\033[32mConnected\033[0m\n")
 	enc.fmt(buf)
+	buf.WriteByte('\n')
+	buf.WriteString(" D% Job                 Name        DPS     Damage Crt  DH CDH  D\n")
 	for _, d := range cd.Msg.Combatant {
 		if d.Job == "" {
 			// Enemies also on this list, can filter them out by checking if job isn't empty.
@@ -212,24 +214,12 @@ func (c CombatantData) fmt(sb *smolBuf) {
 			color = "\033[31m"
 		}
 	}
-	sb.WriteString(color)
-	sb.joins(' ', pad(3, c.DamagePct), c.Job, pad(20, c.Name))
-	sb.WriteByte('\t')
 	dps := c.Dps
 	if dps == "∞" {
 		dps = "Inf"
 	}
-	sb.joins(' ', "DPS:", pad(10, dps))
-	sb.WriteByte('\t')
-	sb.joins(' ', "Dmg:", pad(10, c.Damage))
-	sb.WriteByte('\t')
-	sb.joins(' ', "Crt:", pad(3, c.CritPct))
-	sb.WriteByte('\t')
-	sb.joins(' ', "DH:", pad(3, c.DirectHitPct))
-	sb.WriteByte('\t')
-	sb.joins(' ', "CrtDH:", pad(3, c.CritDirectHitPct))
-	sb.WriteByte('\t')
-	sb.joins(' ', "Deaths:", pad(2, c.Deaths))
+	sb.WriteString(color)
+	sb.joins(' ', pad(3, c.DamagePct), c.Job, pad(20, c.Name), pad(10, dps), pad(10, c.Damage), pad(3, c.CritPct), pad(3, c.DirectHitPct), pad(3, c.CritDirectHitPct), pad(2, c.Deaths))
 	sb.WriteString("\033[0m\n")
 }
 func sortByDamage(a, b CombatantData) int {
